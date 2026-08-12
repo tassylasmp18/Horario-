@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Meu Horário" />
+<title>Meu horário da semana</title>
+<style>
+  html, body { margin:0; padding:0; background:#faf8f4; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect } = React;
+
+// ---- shim: mesma API do window.storage do Claude, mas usando localStorage do navegador ----
+window.storage = {
+  async get(key) {
+    const raw = localStorage.getItem("horario:" + key);
+    if (raw === null) throw new Error("not found");
+    return { key, value: raw, shared: false };
+  },
+  async set(key, value) {
+    localStorage.setItem("horario:" + key, value);
+    return { key, value, shared: false };
+  },
+  async delete(key) {
+    localStorage.removeItem("horario:" + key);
+    return { key, deleted: true, shared: false };
+  },
+  async list(prefix) {
+    const keys = Object.keys(localStorage)
+      .filter(k => k.startsWith("horario:" + (prefix || "")))
+      .map(k => k.slice("horario:".length));
+    return { keys, shared: false };
+  }
+};
+
+const TIME_POINTS = [
+  "07:00","07:50","08:40","08:50","09:40","10:30","11:20","12:10",
+  "13:30","14:20","15:10","15:20","16:10","17:00","17:50","18:40",
+  "19:00","19:50","20:40","21:30",
+];
+const DAYS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+
+function toMin(t) {
+  if (!t) return null;
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+function uid() {
+  return Math.random().toString(36).slice(2, 9);
+}
+
+const TURNOS = [
+  { key: "manha", label: "MANHÃ", from: "07:00", to: "12:10", bar: "#e8c86a" },
+  { key: "tarde", label: "TARDE", from: "13:30", to: "18:40", bar: "#e08a4d" },
+  { key: "noite", label: "NOITE", from: "19:00", to: "21:30", bar: "#3a4a7a" },
+];
+
+const TYPE_STYLES = {
+  fixed:    { bg: "#eef4ff", border: "#7fa8e0", text: "#1e3a68", tag: "Fixo (GIS/MPE/HMP)" },
+  theory:   { bg: "#f4eefc", border: "#a884d6", text: "#3c2560", tag: "Teoria" },
+  practice: { bg: "#fff6e0", border: "#dba528", text: "#5c4308", tag: "Prática · muda por semana" },
+  iesc:     { bg: "#fdeef0", border: "#d9748c", text: "#6e1f30", tag: "IESC VII" },
+  extra:    { bg: "#e9f9f1", border: "#4caf82", text: "#134a30", tag: "Matéria extra (fora Turma B)" },
+};
+
+const FIXED_B = [
+  { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P)", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8", sub: "Débora Rodrigues", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "19:00", end: "21:30", label: "HMP VI (T/P)", sub: "Alana Moura Fé / Gabriel Freire", type: "fixed" },
+  { id: uid(), day: "Terça", start: "19:00", end: "19:50", label: "IESC VII (T)", sub: "Joana Elisabeth / Illoma Leite / Juliana Paraguassú", type: "iesc" },
+  { id: uid(), day: "Terça", start: "19:00", end: "20:40", label: "Clínica Médica II (T)", sub: "Joelma Norões / Natália Brito", type: "theory" },
+  { id: uid(), day: "Quarta", start: "09:40", end: "11:20", label: "Clínica Cirúrgica II (T)", sub: "Djalma Costa / Wilson de Oliveira / Itapuan Damásio / Arquimedes Cardoso e outros", type: "theory" },
+  { id: uid(), day: "Quarta", start: "19:00", end: "21:30", label: "Saúde da Mulher (T)", sub: "Luciano Malta / Leilane Noleto", type: "theory" },
+  { id: uid(), day: "Quinta", start: "19:00", end: "21:30", label: "Clínica Médica II (T)", sub: "Nayanne Piauilino", type: "theory" },
+];
+
+const FIXED_A = [
+  { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P)", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
+  { id: uid(), day: "Terça", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8", sub: "Diego Montalvão", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "19:00", end: "21:30", label: "Saúde da Mulher (T)", sub: "José Arimatea / Bruna Alcobaça", type: "theory" },
+  { id: uid(), day: "Terça", start: "19:00", end: "19:50", label: "IESC VII (T)", sub: "Joana Elisabeth / Illoma Leite / Juliana Paraguassú", type: "iesc" },
+  { id: uid(), day: "Terça", start: "19:00", end: "20:40", label: "Clínica Cirúrgica II (T)", sub: "Djalma Costa / Wilson de Oliveira / Itapuan Damásio / Arquimedes Cardoso e outros", type: "theory" },
+  { id: uid(), day: "Quarta", start: "19:00", end: "21:30", label: "HMP VI (T/P)", sub: "Alana Moura Fé / Gabriel Freire", type: "fixed" },
+  { id: uid(), day: "Quinta", start: "19:00", end: "21:30", label: "Clínica Médica II (T)", sub: "Joelma Norões / Natália Brito", type: "theory" },
+  { id: uid(), day: "Sexta", start: "17:00", end: "18:40", label: "Clínica Médica II (T)", sub: "Nayanne Piauilino", type: "theory" },
+  { id: uid(), day: "Sexta", start: "19:00", end: "19:50", label: "Clínica Médica II (T)", sub: "Nayanne Piauilino", type: "theory" },
+];
+
+const RAW_WEEKS = [
+  ["03–07/08", ["Quinta","07:50","11:20","José Arimatea"], ["Quarta","13:30","15:10","Rodrigo Norões"], ["Quinta","13:30","18:40","Ginivaldo Victor"]],
+  ["10–14/08", ["Quarta","13:30","18:40","Adolfo Basílio"], ["Quinta","15:20","17:00","Arquimedes Cardoso"], ["Sexta","07:00","12:10","Joelma Norões"]],
+  ["17–21/08", ["Quarta","13:30","16:10","Leilane Noleto"], ["Quinta","10:30","12:10","Itapuan Damásio"], ["Terça","07:00","12:10","Mário Nicolau"]],
+  ["24–28/08", ["Quinta","07:00","12:10","Luciano Malta"], ["Quinta","15:20","17:00","Itapuan Damásio"], ["Segunda","13:30","18:40","Andreia Rodrigues"]],
+  ["31/08–04/09", ["Quinta","09:40","12:10","Bruna Alcobaça"], ["Terça","13:30","15:10","Djalma Costa"], ["Terça","07:00","12:10","Mário Nicolau ⚠️ dado duplicado"]],
+  ["07–11/09", ["Quinta","07:00","09:40","Bruna Alcobaça"], ["Quarta","07:00","08:40","Wilson de Oliveira"], ["Terça","07:00","12:10","Celso Soares"]],
+  ["14–18/09", ["Quarta","16:10","18:40","Leilane Noleto"], ["","","","⚠️ P6 não aparece na planilha"], ["Terça","13:30","18:40","Alan Pinho"]],
+  ["21–25/09", ["Terça","15:20","18:40","Francisco Paulo"], ["Quarta","13:30","15:10","Marcelo Oliveira"], ["Quinta","13:30","18:40","Nayanne Piauilino"]],
+  ["28/09–02/10", ["Quinta","07:50","11:20","José Arimatea"], ["Quarta","13:30","15:10","Rodrigo Norões"], ["Quinta","13:30","18:40","Ginivaldo Victor"]],
+  ["05–09/10", ["Quarta","13:30","18:40","Adolfo Basílio"], ["Quinta","10:30","12:10","Itapuan Damásio ⚠️ dado duplicado"], ["Sexta","07:00","12:10","Joelma Norões"]],
+  ["12–16/10", ["Quarta","13:30","16:10","Leilane Noleto"], ["Quinta","10:30","12:10","Itapuan Damásio"], ["Terça","07:00","12:10","Mário Nicolau"]],
+  ["19–23/10", ["Quinta","07:00","12:10","Luciano Malta"], ["Quinta","15:20","17:00","Itapuan Damásio"], ["Segunda","13:30","18:40","Andreia Rodrigues"]],
+  ["26–30/10", ["Quinta","09:40","12:10","Bruna Alcobaça"], ["Terça","13:30","15:10","Djalma Costa"], ["Quarta","13:30","18:40","Andreia Rodrigues"]],
+  ["02–06/11", ["Quinta","07:00","09:40","Bruna Alcobaça"], ["Quarta","07:00","08:40","Wilson de Oliveira"], ["Terça","07:00","12:10","Celso Soares"]],
+  ["09–13/11", ["Quarta","16:10","18:40","Leilane Noleto"], ["Sexta","13:30","15:10","Antonio Ribeiro"], ["Terça","13:30","18:40","Alan Pinho"]],
+];
+
+function buildInitialWeeksB() {
+  return RAW_WEEKS.map(([range, sm, cc, cm]) => ({
+    range,
+    blocks: [
+      { id: uid(), disc: "Saúde da Mulher", day: sm[0], start: sm[1], end: sm[2], prof: sm[3] },
+      { id: uid(), disc: "Clínica Cirúrgica II", day: cc[0], start: cc[1], end: cc[2], prof: cc[3] },
+      { id: uid(), disc: "Clínica Médica II", day: cm[0], start: cm[1], end: cm[2], prof: cm[3] },
+      { id: uid(), disc: "IESC VII (prática)", day: "", start: "", end: "", prof: "" },
+    ],
+  }));
+}
+
+const RAW_WEEKS_A = [
+  ["03–07/08", ["Quinta","15:20","18:40","Francisco Paulo"], ["Quarta","15:20","17:00","Marcelo Oliveira"], ["Terça","13:30","18:40","Diego Montalvão"]],
+  ["10–14/08", ["Quinta","13:30","17:00","Bruna Alcobaça"], ["Terça","15:20","17:00","Djalma Costa"], ["Quarta","07:00","12:10","Celso Soares"]],
+  ["17–21/08", ["Segunda","13:30","18:40","Adolfo Basílio"], ["Terça","13:30","15:10","Itapuan Damásio"], ["Quarta","07:00","12:10","Joelma Norões"]],
+  ["24–28/08", ["Segunda","15:20","18:40","José Arimatea"], ["Sexta","10:30","12:10","Antônio Ribeiro"], ["Quarta","07:00","12:10","Ginivaldo Victor"]],
+  ["31/08–04/09", ["Segunda","15:20","18:40","Francisco Paulo"], ["Sexta","10:30","12:10","José Santana"], ["Quinta","13:30","18:40","Rafael Rebelo"]],
+  ["07–11/09", ["Segunda","13:30","17:00","Luciano Malta"], ["Sexta","08:50","10:30","Wilson de Oliveira"], ["Quinta","13:30","18:40","Ângela Freitas"]],
+  ["14–18/09", ["Quarta","09:40","12:10","Leilane Noleto"], ["Quinta","13:30","15:10","Arquimedes Cardoso"], ["Terça","13:30","18:40","Nayanne Piauilino"]],
+  ["21–25/09", ["Quarta","07:00","09:40","Leilane Noleto"], ["Quarta","15:20","17:00","Rodrigo Norões"], ["Terça","13:30","18:40","Andreia Rodrigues"]],
+  ["28/09–02/10", ["Quinta","15:20","18:40","Francisco Paulo"], ["Quarta","15:20","17:00","Marcelo Oliveira"], ["Terça","13:30","18:40","Diego Montalvão"]],
+  ["05–09/10", ["Quinta","13:30","17:00","Bruna Alcobaça"], ["Terça","15:20","17:00","Djalma Costa"], ["Quarta","07:00","12:10","Celso Soares"]],
+  ["12–16/10", ["Segunda","13:30","18:40","Adolfo Basílio"], ["Terça","13:30","15:10","Itapuan Damásio"], ["Quarta","07:00","12:10","Joelma Norões"]],
+  ["19–23/10", ["Segunda","15:20","18:40","José Arimatea"], ["Sexta","10:30","12:10","Antônio Ribeiro"], ["Quarta","07:00","12:10","Ginivaldo Victor"]],
+  ["26–30/10", ["Segunda","15:20","18:40","Francisco Paulo"], ["Sexta","10:30","12:10","José Santana"], ["Quinta","13:30","18:40","Rafael Rebelo"]],
+  ["02–06/11", ["Segunda","13:30","17:00","Luciano Malta"], ["Sexta","08:50","10:30","Wilson de Oliveira"], ["Quinta","13:30","18:40","Ângela Freitas"]],
+  ["09–13/11", ["Quarta","09:40","12:10","Leilane Noleto"], ["Quinta","13:30","15:10","Arquimedes Cardoso"], ["Terça","13:30","18:40","Nayanne Piauilino"]],
+];
+
+const FIXED_H = [
+  { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P)", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8", sub: "Débora Rodrigues", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "19:00", end: "21:30", label: "HMP VI (T/P)", sub: "Alana Moura Fé / Gabriel Freire", type: "fixed" },
+  { id: uid(), day: "Terça", start: "19:00", end: "19:50", label: "IESC VII (T)", sub: "Joana Elisabeth / Illoma Leite / Juliana Paraguassú", type: "iesc" },
+  { id: uid(), day: "Quarta", start: "09:40", end: "11:20", label: "Clínica Cirúrgica II (T)", sub: "Djalma Costa / Wilson de Oliveira / Itapuan Damásio / Arquimedes Cardoso e outros", type: "theory" },
+  { id: uid(), day: "Quarta", start: "19:00", end: "21:30", label: "Saúde da Mulher (T)", sub: "Luciano Malta / Leilane Noleto", type: "theory" },
+  { id: uid(), day: "Quinta", start: "19:00", end: "21:30", label: "Clínica Médica II (T) — via Turma A", sub: "Joelma Norões / Natália Brito", type: "theory" },
+  { id: uid(), day: "Sexta", start: "17:00", end: "18:40", label: "Clínica Médica II (T) — via Turma A", sub: "Nayanne Piauilino", type: "theory" },
+  { id: uid(), day: "Sexta", start: "19:00", end: "19:50", label: "Clínica Médica II (T) — via Turma A", sub: "Nayanne Piauilino", type: "theory" },
+];
+
+function buildWeeksHybrid() {
+  return RAW_WEEKS.map(([range, sm, cc], i) => {
+    return {
+      range,
+      blocks: [
+        { id: uid(), disc: "Saúde da Mulher", day: sm[0], start: sm[1], end: sm[2], prof: sm[3] },
+        { id: uid(), disc: "Clínica Cirúrgica II", day: cc[0], start: cc[1], end: cc[2], prof: cc[3] },
+        { id: uid(), disc: "Clínica Médica II (via Turma A)", day: "", start: "", end: "", prof: "" },
+        { id: uid(), disc: "IESC VII (prática)", day: "", start: "", end: "", prof: "" },
+      ],
+    };
+  });
+}
+
+function buildWeeksA() {
+  return RAW_WEEKS_A.map(([range]) => ({
+    range,
+    blocks: [
+      { id: uid(), disc: "Saúde da Mulher", day: "", start: "", end: "", prof: "" },
+      { id: uid(), disc: "Clínica Cirúrgica II", day: "", start: "", end: "", prof: "" },
+      { id: uid(), disc: "Clínica Médica II", day: "", start: "", end: "", prof: "" },
+      { id: uid(), disc: "IESC VII (prática)", day: "", start: "", end: "", prof: "" },
+    ],
+  }));
+}
+
+const FIXED_MC23 = [
+  { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P)", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8", sub: "Débora Rodrigues", type: "fixed" },
+  { id: uid(), day: "Terça", start: "19:00", end: "19:50", label: "IESC VII (T)", sub: "Joana Elisabeth / Illoma Leite / Juliana Paraguassú", type: "iesc" },
+  { id: uid(), day: "Quarta", start: "09:40", end: "11:20", label: "Clínica Cirúrgica II (T)", sub: "Djalma Costa / Wilson de Oliveira / Itapuan Damásio / Arquimedes Cardoso e outros", type: "theory" },
+  { id: uid(), day: "Quarta", start: "19:00", end: "21:30", label: "Saúde da Mulher (T)", sub: "Luciano Malta / Leilane Noleto", type: "theory" },
+  { id: uid(), day: "Quinta", start: "19:00", end: "21:30", label: "Clínica Médica II (T) — via Turma A", sub: "Joelma Norões / Natália Brito", type: "theory" },
+  { id: uid(), day: "Sexta", start: "17:00", end: "18:40", label: "Clínica Médica II (T) — via Turma A", sub: "Nayanne Piauilino", type: "theory" },
+  { id: uid(), day: "Sexta", start: "19:00", end: "19:50", label: "Clínica Médica II (T) — via Turma A", sub: "Nayanne Piauilino", type: "theory" },
+  { id: uid(), day: "Terça", start: "17:00", end: "18:40", label: "Clínica Médica III (T)", sub: "", type: "theory" },
+  { id: uid(), day: "Quarta", start: "19:00", end: "20:40", label: "Clínica Médica III (T)", sub: "", type: "theory" },
+  { id: uid(), day: "Quinta", start: "15:20", end: "17:00", label: "Clínica Médica III (T)", sub: "", type: "theory" },
+  { id: uid(), day: "Segunda", start: "19:00", end: "21:30", label: "Clínica Cirúrgica III (T)", sub: "", type: "theory" },
+];
+
+function buildWeeksMC23() {
+  return RAW_WEEKS.map(([range, sm, cc], i) => {
+    return {
+      range,
+      blocks: [
+        { id: uid(), disc: "Saúde da Mulher", day: sm[0], start: sm[1], end: sm[2], prof: sm[3] },
+        { id: uid(), disc: "Clínica Cirúrgica II", day: cc[0], start: cc[1], end: cc[2], prof: cc[3] },
+        { id: uid(), disc: "Clínica Médica II (via Turma A)", day: "", start: "", end: "", prof: "" },
+        { id: uid(), disc: "Clínica Médica III (prática)", day: "", start: "", end: "", prof: "" },
+        { id: uid(), disc: "Clínica Cirúrgica III (prática)", day: "", start: "", end: "", prof: "" },
+        { id: uid(), disc: "IESC VII (prática)", day: "", start: "", end: "", prof: "" },
+      ],
+    };
+  });
+}
+
+const FIXED_B_SMA3 = [
+  { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P) — via B", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8 (via B)", sub: "Débora Rodrigues", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "19:00", end: "21:30", label: "Saúde da Mulher (T) — via A", sub: "José Arimatea / Bruna Alcobaça", type: "theory" },
+  { id: uid(), day: "Terça", start: "19:00", end: "20:40", label: "Clínica Médica II (T) — via B", sub: "Joelma Norões / Natália Brito", type: "theory" },
+  { id: uid(), day: "Quinta", start: "19:00", end: "21:30", label: "Clínica Médica II (T) — via B", sub: "Nayanne Piauilino", type: "theory" },
+  { id: uid(), day: "Quarta", start: "09:40", end: "11:20", label: "Clínica Cirúrgica II (T) — via B", sub: "Djalma Costa / Wilson de Oliveira / Itapuan Damásio / Arquimedes Cardoso e outros", type: "theory" },
+  { id: uid(), day: "Terça", start: "17:00", end: "18:40", label: "Clínica Médica III (T)", sub: "", type: "theory" },
+  { id: uid(), day: "Quarta", start: "19:00", end: "20:40", label: "Clínica Médica III (T)", sub: "", type: "theory" },
+  { id: uid(), day: "Quinta", start: "15:20", end: "17:00", label: "Clínica Médica III (T)", sub: "", type: "theory" },
+];
+
+function buildWeeksBSMA3() {
+  return RAW_WEEKS.map(([range, sm, cc, cm]) => ({
+    range,
+    blocks: [
+      { id: uid(), disc: "Saúde da Mulher (via A)", day: "", start: "", end: "", prof: "" },
+      { id: uid(), disc: "Clínica Cirúrgica II (via B)", day: cc[0], start: cc[1], end: cc[2], prof: cc[3] },
+      { id: uid(), disc: "Clínica Médica II (via B)", day: cm[0], start: cm[1], end: cm[2], prof: cm[3] },
+      { id: uid(), disc: "Clínica Médica III (prática)", day: "", start: "", end: "", prof: "" },
+    ],
+  }));
+}
+
+const FIXED_A3 = [
+  { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P) — via B", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8 (via B)", sub: "Débora Rodrigues", type: "fixed" },
+  { id: uid(), day: "Segunda", start: "19:00", end: "21:30", label: "Saúde da Mulher (T) — via A", sub: "José Arimatea / Bruna Alcobaça", type: "theory" },
+  { id: uid(), day: "Terça", start: "19:00", end: "19:50", label: "IESC VII (T)", sub: "Joana Elisabeth / Illoma Leite / Juliana Paraguassú", type: "iesc" },
+  { id: uid(), day: "Quarta", start: "09:40", end: "11:20", label: "Clínica Cirúrgica II (T) — via B", sub: "Djalma Costa / Wilson de Oliveira / Itapuan Damásio / Arquimedes Cardoso e outros", type: "theory" },
+  { id: uid(), day: "Quinta", start: "19:00", end: "21:30", label: "Clínica Médica II (T) — via A", sub: "Joelma Norões / Natália Brito", type: "theory" },
+  { id: uid(), day: "Sexta", start: "17:00", end: "18:40", label: "Clínica Médica II (T) — via A", sub: "Nayanne Piauilino", type: "theory" },
+  { id: uid(), day: "Sexta", start: "19:00", end: "19:50", label: "Clínica Médica II (T) — via A", sub: "Nayanne Piauilino", type: "theory" },
+  { id: uid(), day: "Terça", start: "17:00", end: "18:40", label: "Clínica Médica III (T)", sub: "", type: "theory" },
+  { id: uid(), day: "Quarta", start: "19:00", end: "20:40", label: "Clínica Médica III (T)", sub: "", type: "theory" },
+  { id: uid(), day: "Quinta", start: "15:20", end: "17:00", label: "Clínica Médica III (T)", sub: "", type: "theory" },
+];
+
+function buildWeeksA3() {
+  return RAW_WEEKS.map(([range, sm, cc]) => ({
+    range,
+    blocks: [
+      { id: uid(), disc: "Saúde da Mulher (via A)", day: "", start: "", end: "", prof: "" },
+      { id: uid(), disc: "Clínica Cirúrgica II (via B)", day: cc[0], start: cc[1], end: cc[2], prof: cc[3] },
+      { id: uid(), disc: "Clínica Médica II (via A)", day: "", start: "", end: "", prof: "" },
+      { id: uid(), disc: "Clínica Médica III (prática)", day: "", start: "", end: "", prof: "" },
+      { id: uid(), disc: "IESC VII (prática)", day: "", start: "", end: "", prof: "" },
+    ],
+  }));
+}
+
+function buildBlankWeeks() {
+  return RAW_WEEKS.map(([range]) => ({
+    range,
+    blocks: [
+      { id: uid(), disc: "Matéria 1", day: "", start: "", end: "", prof: "" },
+      { id: uid(), disc: "Matéria 2", day: "", start: "", end: "", prof: "" },
+      { id: uid(), disc: "Matéria 3", day: "", start: "", end: "", prof: "" },
+    ],
+  }));
+}
+
+function inTurno(startMin, turno) {
+  return startMin >= toMin(turno.from) && startMin < toMin(turno.to);
+}
+
+const SLOT_PAIRS = TIME_POINTS.slice(0, -1).map((t, i) => [t, TIME_POINTS[i + 1]]);
+
+function turnoOf(startMin) {
+  return TURNOS.find((t) => startMin >= toMin(t.from) && startMin < toMin(t.to)) || TURNOS[TURNOS.length - 1];
+}
+
+function buildDayCells(day, blocks) {
+  const dayBlocks = blocks.filter((b) => b.day === day);
+  const cellAt = new Array(SLOT_PAIRS.length).fill(undefined);
+  let r = 0;
+  while (r < SLOT_PAIRS.length) {
+    if (cellAt[r] !== undefined) { r++; continue; }
+    const slotStart = toMin(SLOT_PAIRS[r][0]);
+    const here = dayBlocks.filter((b) => b.startMin === slotStart);
+    if (here.length) {
+      const maxEnd = Math.max(...here.map((b) => b.endMin));
+      let span = 1;
+      while (r + span < SLOT_PAIRS.length && toMin(SLOT_PAIRS[r + span - 1][1]) < maxEnd) span++;
+      cellAt[r] = { blocks: here, span };
+      for (let k = 1; k < span; k++) cellAt[r + k] = null;
+      r += span;
+    } else {
+      cellAt[r] = { blocks: [], span: 1 };
+      r += 1;
+    }
+  }
+  return cellAt;
+}
+
+function GridView({ blocks }) {
+  const perDay = useMemo(() => {
+    const map = {};
+    DAYS.forEach((d) => (map[d] = buildDayCells(d, blocks)));
+    return map;
+  }, [blocks]);
+
+  return (
+    <div style={{ overflowX: "auto", border: "1px solid #e4ddc9", borderRadius: 12, background: "#fff", marginBottom: 22 }}>
+      <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 760 }}>
+        <thead>
+          <tr>
+            <th style={gridHeadStyle}></th>
+            {DAYS.map((d) => <th key={d} style={gridHeadStyle}>{d}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {SLOT_PAIRS.map((slot, i) => {
+            const turno = turnoOf(toMin(slot[0]));
+            return (
+              <tr key={i}>
+                <td style={{ ...gridTimeStyle, borderLeft: `4px solid ${turno.bar}` }}>{slot[0]}<br/>{slot[1]}</td>
+                {DAYS.map((d) => {
+                  const cell = perDay[d][i];
+                  if (cell === null) return null;
+                  const { blocks: cellBlocks, span } = cell;
+                  return (
+                    <td key={d} rowSpan={span} style={gridCellStyle}>
+                      {cellBlocks.map((b) => {
+                        const s = TYPE_STYLES[b.type];
+                        return (
+                          <div
+                            key={b.id}
+                            style={{
+                              background: s.bg,
+                              border: `1.5px solid ${b.conflict ? "#d23c3c" : s.border}`,
+                              borderRadius: 6,
+                              padding: "4px 6px",
+                              marginBottom: 4,
+                              fontSize: 10.5,
+                            }}
+                          >
+                            <div style={{ fontWeight: 700, color: s.text }}>{b.label}</div>
+                            {b.sub && <div style={{ color: s.text, opacity: 0.85 }}>{b.sub}</div>}
+                            {b.conflict && <div style={{ color: "#d23c3c", fontWeight: 700 }}>⚠ choque</div>}
+                          </div>
+                        );
+                      })}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const gridHeadStyle = { padding: "8px 6px", fontSize: 12, fontWeight: 700, color: "#3a3f4d", background: "#f3efe4", borderBottom: "1px solid #e4ddc9", position: "sticky", top: 0 };
+const gridTimeStyle = { padding: "4px 8px", fontSize: 9.5, color: "#9a9484", background: "#f8f5ec", whiteSpace: "nowrap", borderBottom: "1px solid #f0ead9" };
+const gridCellStyle = { padding: 5, verticalAlign: "top", borderBottom: "1px solid #f0ead9", borderLeft: "1px solid #f0ead9", minWidth: 120 };
+
+function Card({ b }) {
+  const s = TYPE_STYLES[b.type];
+  return (
+    <div
+      style={{
+        background: s.bg,
+        border: `1.5px solid ${b.conflict ? "#d23c3c" : s.border}`,
+        borderRadius: 7,
+        padding: "6px 8px",
+        marginBottom: 6,
+        boxShadow: b.conflict ? "0 0 0 1px #d23c3c inset" : "none",
+      }}
+    >
+      <div style={{ fontSize: 10, fontWeight: 700, color: s.text, opacity: 0.75 }}>
+        {b.start}–{b.end} {b.conflict && <span style={{ color: "#d23c3c" }}>⚠ choque</span>}
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: s.text, lineHeight: 1.25 }}>{b.label}</div>
+      {b.sub && <div style={{ fontSize: 10.5, color: s.text, opacity: 0.85, lineHeight: 1.25 }}>{b.sub}</div>}
+    </div>
+  );
+}
+
+function App() {
+  const [turma, setTurma] = useState("B");
+  const [turmas, setTurmas] = useState({
+    B: { name: "Turma B (P6)", fixed: FIXED_B, weeks: buildInitialWeeksB(), group: "P6" },
+    A: { name: "Turma A (P8)", fixed: FIXED_A, weeks: buildWeeksA(), group: "P8" },
+    H: { name: "Híbrido (B sem Médica + Médica da A)", fixed: FIXED_H, weeks: buildWeeksHybrid(), group: "P6 (SM/CC) + P8 (Médica)" },
+    MC23: { name: "Médica + Cirúrgica II e III (sem HMP)", fixed: FIXED_MC23, weeks: buildWeeksMC23(), group: "P6 (SM/CC) + P8 (Médica II)" },
+    A3: { name: "Turma A + Cirúrgica II da B + Médica III (sem HMP)", fixed: FIXED_A3, weeks: buildWeeksA3(), group: "P8 (SM/CM) + P6 (Cirúrgica II)" },
+    BSMA3: { name: "Turma B (Médica+Cirúrgica) + SM via A + Médica III (sem HMP/IESC)", fixed: FIXED_B_SMA3, weeks: buildWeeksBSMA3(), group: "P6 + Médica III" },
+  });
+  const [extras, setExtras] = useState([]);
+  const [weekIdx, setWeekIdx] = useState(0);
+  const [openEditor, setOpenEditor] = useState(null);
+  const [view, setView] = useState("turno");
+  const [loaded, setLoaded] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const fallbackNames = { B: "Turma B (P6)", A: "Turma A (P8)", H: "Híbrido (B sem Médica + Médica da A)" };
+    async function load() {
+      try {
+        const result = await window.storage.get("meu-horario-tassyla");
+        if (!cancelled && result && result.value) {
+          const data = JSON.parse(result.value);
+          if (data.turmas) {
+            const fixedTurmas = {};
+            Object.entries(data.turmas).forEach(([id, t]) => {
+              fixedTurmas[id] = { ...t, name: t.name || fallbackNames[id] || `Cenário ${id}` };
+            });
+            setTurmas(fixedTurmas);
+          }
+          if (data.extras) setExtras(data.extras);
+        }
+      } catch (e) {
+        // nada salvo ainda, tudo bem
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    setSaveStatus("saving");
+    const t = setTimeout(async () => {
+      try {
+        await window.storage.set("meu-horario-tassyla", JSON.stringify({ turmas, extras }));
+        setSaveStatus("saved");
+      } catch (e) {
+        setSaveStatus("");
+      }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [turmas, extras, loaded]);
+
+  const fixed = turmas[turma]?.fixed || [];
+  const weeks = turmas[turma]?.weeks || buildBlankWeeks();
+
+  function setFixed(updater) {
+    setTurmas((t) => ({ ...t, [turma]: { ...t[turma], fixed: typeof updater === "function" ? updater(t[turma].fixed) : updater } }));
+  }
+  function setWeeks(updater) {
+    setTurmas((t) => ({ ...t, [turma]: { ...t[turma], weeks: typeof updater === "function" ? updater(t[turma].weeks) : updater } }));
+  }
+
+  const currentBlocks = useMemo(() => {
+    const rot = weeks[weekIdx].blocks
+      .filter((b) => b.day && b.start && b.end)
+      .map((b) => ({ id: b.id, day: b.day, start: b.start, end: b.end, label: b.disc, sub: b.prof, type: "practice" }));
+    const all = [...fixed, ...extras, ...rot]
+      .filter((b) => b.day && b.start && b.end)
+      .map((b) => ({ ...b, startMin: toMin(b.start), endMin: toMin(b.end) }));
+    all.forEach((b) => {
+      b.conflict = all.some(
+        (o) => o.id !== b.id && o.day === b.day && !(o.endMin <= b.startMin || o.startMin >= b.endMin)
+      );
+    });
+    return all;
+  }, [fixed, extras, weeks, weekIdx]);
+
+  function blocksFor(day, turno) {
+    return currentBlocks
+      .filter((b) => b.day === day && inTurno(b.startMin, turno))
+      .sort((a, b) => a.startMin - b.startMin);
+  }
+
+  function updateItem(setter, id, field, value) {
+    setter((list) => list.map((b) => (b.id === id ? { ...b, [field]: value } : b)));
+  }
+  function removeItem(setter, id) {
+    setter((list) => list.filter((b) => b.id !== id));
+  }
+  function updateWeekBlock(id, field, value) {
+    setWeeks((ws) =>
+      ws.map((w, i) =>
+        i !== weekIdx ? w : { ...w, blocks: w.blocks.map((b) => (b.id === id ? { ...b, [field]: value } : b)) }
+      )
+    );
+  }
+
+  function addScenario() {
+    const newId = uid();
+    setTurmas((t) => ({
+      ...t,
+      [newId]: {
+        name: "Novo cenário",
+        group: "",
+        fixed: [],
+        weeks: buildBlankWeeks(),
+      },
+    }));
+    setTurma(newId);
+  }
+  function renameScenario(id, name) {
+    setTurmas((t) => ({ ...t, [id]: { ...t[id], name } }));
+  }
+  function removeScenario(id) {
+    const keys = Object.keys(turmas);
+    if (keys.length <= 1) return;
+    const rest = { ...turmas };
+    delete rest[id];
+    if (turma === id) {
+      setTurma(Object.keys(rest)[0]);
+    }
+    setTurmas(rest);
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#faf8f4", fontFamily: "'Inter', system-ui, sans-serif", color: "#1f2430" }}>
+      <div style={{ maxWidth: 1180, margin: "0 auto", padding: "26px 18px 60px" }}>
+        <header style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 11.5, letterSpacing: 2, textTransform: "uppercase", color: "#8a7a5c", fontWeight: 700 }}>
+            2026.2 · Grupo {turmas[turma]?.group || "—"}
+          </div>
+          <h1 style={{ fontSize: 26, fontWeight: 800, margin: "4px 0 2px", color: "#1e2536" }}>Meu horário da semana</h1>
+          <p style={{ fontSize: 13, color: "#5c6270", margin: "0 0 4px" }}>
+            {turmas[turma]?.name || "—"} — organizado por turno. Amarelo = prática que muda toda semana.
+          </p>
+          <p style={{ fontSize: 11.5, color: "#b0a480", margin: 0, fontStyle: "italic" }}>
+            criado por Tássyla Sampaio {saveStatus === "saving" && "· salvando..."} {saveStatus === "saved" && "· ✓ salvo neste aparelho"}
+          </p>
+        </header>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+          {Object.entries(turmas).map(([id, t]) => (
+            <button
+              key={id}
+              onClick={() => setTurma(id)}
+              style={{ ...btnStyle, background: turma === id ? "#3a4a7a" : "#fff", color: turma === id ? "#fff" : "#3a3f4d", borderColor: turma === id ? "#3a4a7a" : "#d8d2c4" }}
+            >
+              {t.name || `Cenário ${id}`}
+            </button>
+          ))}
+          <button onClick={() => setOpenEditor(openEditor === "scenarios" ? null : "scenarios")} style={{ ...btnStyle, borderStyle: "dashed" }}>
+            ⚙ Gerenciar cenários
+          </button>
+          <button
+            onClick={async () => {
+              if (!window.confirm("Isso apaga tudo que você salvou neste aparelho e volta pro padrão original. Continuar?")) return;
+              try { await window.storage.delete("meu-horario-tassyla"); } catch (e) {}
+              window.location.reload();
+            }}
+            style={{ ...btnStyle, borderColor: "#d97b7b", color: "#a83b3b" }}
+          >
+            ↺ Restaurar padrão
+          </button>
+        </div>
+
+        {openEditor === "scenarios" && (
+          <div style={boxStyle}>
+            <div style={{ fontSize: 12, color: "#8a7a5c", marginBottom: 8 }}>
+              Renomeie, apague ou crie um novo cenário (parte de uma cópia do que está selecionado agora).
+            </div>
+            {Object.entries(turmas).map(([id, t]) => (
+              <Row key={id}>
+                <input value={t.name} onChange={(e) => renameScenario(id, e.target.value)} style={{ ...inpStyle, minWidth: 220 }} />
+                <button onClick={() => removeScenario(id)} disabled={Object.keys(turmas).length <= 1} style={{ ...rmStyle, opacity: Object.keys(turmas).length <= 1 ? 0.4 : 1 }}>
+                  Apagar
+                </button>
+              </Row>
+            ))}
+            <button onClick={addScenario} style={{ ...btnStyle, marginTop: 6 }}>+ Novo cenário (cópia do atual)</button>
+          </div>
+        )}
+
+        {turma === "H" && (
+          <div style={{ fontSize: 12, color: "#5a1f3a", background: "#fdeef5", border: "1px solid #d97ba8", borderRadius: 8, padding: "8px 12px", marginBottom: 14 }}>
+            Cenário simulado: Saúde da Mulher e Clínica Cirúrgica II continuam pela Turma B (P6). Clínica Médica II (teoria de quinta e sexta + prática) passa a vir da Turma A (P8). Terça à noite fica livre de choque nesse cenário.
+          </div>
+        )}
+        {turma === "A" && (
+          <div style={{ fontSize: 12, color: "#3a3f4d", background: "#f3efe4", border: "1px solid #e4ddc9", borderRadius: 8, padding: "8px 12px", marginBottom: 14 }}>
+            Horários fixos da Turma A vieram da grade em PDF que você enviou. Confira e corrija em "Editar horários fixos" se algo estiver diferente.
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
+          {weeks.map((w, i) => (
+            <button
+              key={i}
+              onClick={() => setWeekIdx(i)}
+              style={{
+                padding: "6px 11px", borderRadius: 8,
+                border: i === weekIdx ? "1.5px solid #1e2536" : "1px solid #d8d2c4",
+                background: i === weekIdx ? "#1e2536" : "#fff",
+                color: i === weekIdx ? "#fff" : "#3a3f4d",
+                fontSize: 12, fontWeight: 600, cursor: "pointer",
+              }}
+            >
+              S{i + 1} · {w.range}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 20, fontSize: 12 }}>
+          {Object.entries(TYPE_STYLES).map(([k, s]) => (
+            <div key={k} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 11, height: 11, borderRadius: 3, background: s.bg, border: `1.5px solid ${s.border}` }} />
+              <span style={{ color: "#5c6270" }}>{s.tag}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+          <button
+            onClick={() => setView("turno")}
+            style={{ ...btnStyle, background: view === "turno" ? "#1e2536" : "#fff", color: view === "turno" ? "#fff" : "#3a3f4d", borderColor: view === "turno" ? "#1e2536" : "#d8d2c4" }}
+          >
+            Por turno
+          </button>
+          <button
+            onClick={() => setView("grade")}
+            style={{ ...btnStyle, background: view === "grade" ? "#1e2536" : "#fff", color: view === "grade" ? "#fff" : "#3a3f4d", borderColor: view === "grade" ? "#1e2536" : "#d8d2c4" }}
+          >
+            Grade horizontal
+          </button>
+        </div>
+
+        {view === "grade" && <GridView blocks={currentBlocks} />}
+
+        {view === "turno" && TURNOS.map((turno) => (
+          <div key={turno.key} style={{ marginBottom: 22, border: "1px solid #e4ddc9", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
+            <div style={{ background: turno.bar, padding: "8px 14px", color: "#fff", fontWeight: 800, fontSize: 13, letterSpacing: 1.5 }}>
+              {turno.label} <span style={{ fontWeight: 500, opacity: 0.85, fontSize: 11.5 }}>({turno.from}–{turno.to})</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)" }}>
+              {DAYS.map((day, di) => {
+                const items = blocksFor(day, turno);
+                return (
+                  <div key={day} style={{ padding: 8, borderRight: di < 5 ? "1px solid #f0ead9" : "none", minHeight: 40 }}>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, color: "#9a9484", marginBottom: 6, textTransform: "uppercase" }}>{day.slice(0,3)}</div>
+                    {items.length === 0 && <div style={{ fontSize: 10.5, color: "#c7c0ac", fontStyle: "italic" }}>livre</div>}
+                    {items.map((b) => <Card key={b.id + b.start} b={b} />)}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={() => setOpenEditor(openEditor === "fixed" ? null : "fixed")} style={btnStyle}>
+            {openEditor === "fixed" ? "Fechar" : "Editar"} horários fixos
+          </button>
+          <button onClick={() => setOpenEditor(openEditor === "week" ? null : "week")} style={btnStyle}>
+            {openEditor === "week" ? "Fechar" : "Editar"} prática desta semana
+          </button>
+          <button onClick={() => setOpenEditor(openEditor === "extra" ? null : "extra")} style={{ ...btnStyle, borderColor: "#4caf82", color: "#134a30" }}>
+            {openEditor === "extra" ? "Fechar" : "+"} matérias extras (fora Turma B)
+          </button>
+        </div>
+
+        {openEditor === "fixed" && (
+          <div style={boxStyle}>
+            {fixed.map((b) => (
+              <Row key={b.id}>
+                <select value={b.day} onChange={(e) => updateItem(setFixed, b.id, "day", e.target.value)} style={selStyle}>
+                  {DAYS.map((d) => <option key={d}>{d}</option>)}
+                </select>
+                <select value={b.start} onChange={(e) => updateItem(setFixed, b.id, "start", e.target.value)} style={selStyle}>
+                  {TIME_POINTS.map((t) => <option key={t}>{t}</option>)}
+                </select>
+                <span>–</span>
+                <select value={b.end} onChange={(e) => updateItem(setFixed, b.id, "end", e.target.value)} style={selStyle}>
+                  {TIME_POINTS.map((t) => <option key={t}>{t}</option>)}
+                </select>
+                <input value={b.label} onChange={(e) => updateItem(setFixed, b.id, "label", e.target.value)} style={inpStyle} placeholder="Nome" />
+                <input value={b.sub} onChange={(e) => updateItem(setFixed, b.id, "sub", e.target.value)} style={inpStyle} placeholder="Docente" />
+                <select value={b.type} onChange={(e) => updateItem(setFixed, b.id, "type", e.target.value)} style={selStyle}>
+                  <option value="fixed">Fixo</option>
+                  <option value="theory">Teoria</option>
+                  <option value="iesc">IESC VII</option>
+                </select>
+                <button onClick={() => removeItem(setFixed, b.id)} style={rmStyle}>Remover</button>
+              </Row>
+            ))}
+            <button onClick={() => setFixed((f) => [...f, { id: uid(), day: "Segunda", start: "07:00", end: "07:50", label: "Nova atividade", sub: "", type: "fixed" }])} style={{ ...btnStyle, marginTop: 6 }}>
+              + Adicionar horário fixo
+            </button>
+          </div>
+        )}
+
+        {openEditor === "extra" && (
+          <div style={boxStyle}>
+            <div style={{ fontSize: 12, color: "#134a30", marginBottom: 8 }}>
+              Matérias que você vai cursar fora da Turma B (outros períodos). Aparecem em verde no calendário e valem pra todas as semanas.
+            </div>
+            {extras.length === 0 && <div style={{ fontSize: 12, color: "#9a9484", marginBottom: 8 }}>Nenhuma matéria extra ainda.</div>}
+            {extras.map((b) => (
+              <Row key={b.id}>
+                <select value={b.day} onChange={(e) => updateItem(setExtras, b.id, "day", e.target.value)} style={selStyle}>
+                  {DAYS.map((d) => <option key={d}>{d}</option>)}
+                </select>
+                <select value={b.start} onChange={(e) => updateItem(setExtras, b.id, "start", e.target.value)} style={selStyle}>
+                  {TIME_POINTS.map((t) => <option key={t}>{t}</option>)}
+                </select>
+                <span>–</span>
+                <select value={b.end} onChange={(e) => updateItem(setExtras, b.id, "end", e.target.value)} style={selStyle}>
+                  {TIME_POINTS.map((t) => <option key={t}>{t}</option>)}
+                </select>
+                <input value={b.label} onChange={(e) => updateItem(setExtras, b.id, "label", e.target.value)} style={inpStyle} placeholder="Nome da matéria" />
+                <input value={b.sub} onChange={(e) => updateItem(setExtras, b.id, "sub", e.target.value)} style={inpStyle} placeholder="Docente / turma" />
+                <button onClick={() => removeItem(setExtras, b.id)} style={rmStyle}>Remover</button>
+              </Row>
+            ))}
+            <button
+              onClick={() => setExtras((f) => [...f, { id: uid(), day: "Segunda", start: "07:00", end: "07:50", label: "Nova matéria", sub: "", type: "extra" }])}
+              style={{ ...btnStyle, marginTop: 6, borderColor: "#4caf82", color: "#134a30" }}
+            >
+              + Adicionar matéria extra
+            </button>
+          </div>
+        )}
+
+        {openEditor === "week" && (
+          <div style={boxStyle}>
+            <div style={{ fontSize: 12, color: "#8a7a5c", marginBottom: 8, fontWeight: 700 }}>
+              Semana {weekIdx + 1} · {weeks[weekIdx].range}
+            </div>
+            {weeks[weekIdx].blocks.map((b) => (
+              <Row key={b.id}>
+                <input value={b.disc} onChange={(e) => updateWeekBlock(b.id, "disc", e.target.value)} style={{ ...inpStyle, minWidth: 140, fontWeight: 600 }} placeholder="Nome da matéria" />
+                <select value={b.day} onChange={(e) => updateWeekBlock(b.id, "day", e.target.value)} style={selStyle}>
+                  <option value="">—</option>
+                  {DAYS.map((d) => <option key={d}>{d}</option>)}
+                </select>
+                <select value={b.start} onChange={(e) => updateWeekBlock(b.id, "start", e.target.value)} style={selStyle}>
+                  <option value="">—</option>
+                  {TIME_POINTS.map((t) => <option key={t}>{t}</option>)}
+                </select>
+                <span>–</span>
+                <select value={b.end} onChange={(e) => updateWeekBlock(b.id, "end", e.target.value)} style={selStyle}>
+                  <option value="">—</option>
+                  {TIME_POINTS.map((t) => <option key={t}>{t}</option>)}
+                </select>
+                <input value={b.prof} onChange={(e) => updateWeekBlock(b.id, "prof", e.target.value)} style={inpStyle} placeholder="Docente" />
+              </Row>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Row({ children }) {
+  return <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>{children}</div>;
+}
+
+const btnStyle = { padding: "8px 14px", borderRadius: 8, border: "1px solid #d8d2c4", background: "#fff", fontSize: 12.5, fontWeight: 600, cursor: "pointer", color: "#3a3f4d" };
+const boxStyle = { marginTop: 12, padding: 14, background: "#fff", border: "1px solid #e4ddc9", borderRadius: 10 };
+const selStyle = { padding: "5px 6px", borderRadius: 6, border: "1px solid #d8d2c4", fontSize: 12 };
+const inpStyle = { padding: "5px 8px", borderRadius: 6, border: "1px solid #d8d2c4", fontSize: 12, flex: 1, minWidth: 110 };
+const rmStyle = { padding: "5px 10px", borderRadius: 6, border: "1px solid #e8b3b3", background: "#fdeeee", color: "#a83b3b", fontSize: 11.5, cursor: "pointer" };
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
