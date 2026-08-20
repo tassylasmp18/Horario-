@@ -20,29 +20,6 @@
 <script type="text/babel" data-presets="react">
 const { useState, useMemo, useEffect } = React;
 
-// ---- shim: mesma API do window.storage do Claude, mas usando localStorage do navegador ----
-window.storage = {
-  async get(key) {
-    const raw = localStorage.getItem("horario:" + key);
-    if (raw === null) throw new Error("not found");
-    return { key, value: raw, shared: false };
-  },
-  async set(key, value) {
-    localStorage.setItem("horario:" + key, value);
-    return { key, value, shared: false };
-  },
-  async delete(key) {
-    localStorage.removeItem("horario:" + key);
-    return { key, deleted: true, shared: false };
-  },
-  async list(prefix) {
-    const keys = Object.keys(localStorage)
-      .filter(k => k.startsWith("horario:" + (prefix || "")))
-      .map(k => k.slice("horario:".length));
-    return { keys, shared: false };
-  }
-};
-
 const TIME_POINTS = [
   "07:00","07:50","08:40","08:50","09:40","10:30","11:20","12:10",
   "13:30","14:20","15:10","15:20","16:10","17:00","17:50","18:40",
@@ -77,13 +54,13 @@ const FIXED_B = [
   { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P)", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
   { id: uid(), day: "Segunda", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8", sub: "Débora Rodrigues", type: "fixed" },
   { id: uid(), day: "Segunda", start: "19:00", end: "21:30", label: "HMP VI (T/P)", sub: "Alana Moura Fé / Gabriel Freire", type: "fixed" },
-  { id: uid(), day: "Terça", start: "19:00", end: "19:50", label: "IESC VII (T)", sub: "Joana Elisabeth / Illoma Leite / Juliana Paraguassú", type: "iesc" },
   { id: uid(), day: "Terça", start: "19:00", end: "20:40", label: "Clínica Médica II (T)", sub: "Joelma Norões / Natália Brito", type: "theory" },
   { id: uid(), day: "Quarta", start: "09:40", end: "11:20", label: "Clínica Cirúrgica II (T)", sub: "Djalma Costa / Wilson de Oliveira / Itapuan Damásio / Arquimedes Cardoso e outros", type: "theory" },
   { id: uid(), day: "Quarta", start: "19:00", end: "21:30", label: "Saúde da Mulher (T)", sub: "Luciano Malta / Leilane Noleto", type: "theory" },
   { id: uid(), day: "Quinta", start: "19:00", end: "21:30", label: "Clínica Médica II (T)", sub: "Nayanne Piauilino", type: "theory" },
 ];
 
+// Turma A — horários fixos reais, extraídos da grade em PDF (Bloco VI/A 504) que você enviou
 const FIXED_A = [
   { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P)", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
   { id: uid(), day: "Terça", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8", sub: "Diego Montalvão", type: "fixed" },
@@ -96,22 +73,23 @@ const FIXED_A = [
   { id: uid(), day: "Sexta", start: "19:00", end: "19:50", label: "Clínica Médica II (T)", sub: "Nayanne Piauilino", type: "theory" },
 ];
 
+// Turma B (P6) — cronograma oficial atualizado (PDF "CRONOGRAMA_DE_PRATICAS_M6B_2026_2"), sem IESC (não cursada)
 const RAW_WEEKS = [
-  ["03–07/08", ["Quinta","07:50","11:20","José Arimatea"], ["Quarta","13:30","15:10","Rodrigo Norões"], ["Quinta","13:30","18:40","Ginivaldo Victor"]],
+  ["03–07/08", ["Quinta","09:40","12:10","Luciano Malta"], ["Quarta","13:30","15:10","Rodrigo Norões"], ["Quinta","13:30","18:40","Ginivaldo Victor"]],
   ["10–14/08", ["Quarta","13:30","18:40","Adolfo Basílio"], ["Quinta","15:20","17:00","Arquimedes Cardoso"], ["Sexta","07:00","12:10","Joelma Norões"]],
-  ["17–21/08", ["Quarta","13:30","16:10","Leilane Noleto"], ["Quinta","10:30","12:10","Itapuan Damásio"], ["Terça","07:00","12:10","Mário Nicolau"]],
-  ["24–28/08", ["Quinta","07:00","12:10","Luciano Malta"], ["Quinta","15:20","17:00","Itapuan Damásio"], ["Segunda","13:30","18:40","Andreia Rodrigues"]],
-  ["31/08–04/09", ["Quinta","09:40","12:10","Bruna Alcobaça"], ["Terça","13:30","15:10","Djalma Costa"], ["Terça","07:00","12:10","Mário Nicolau ⚠️ dado duplicado"]],
+  ["17–21/08", ["Terça","15:20","18:40","Francisco Paulo"], ["Quinta","10:30","12:10","Itapuan Damásio"], ["Terça","07:00","12:10","Mário Nicolau (precep.)"]],
+  ["24–28/08", ["Quinta","07:00","09:40","Luciano Malta"], ["Quinta","15:20","17:00","Itapuan Damásio"], ["Segunda","13:30","18:40","Andreia Rodrigues"]],
+  ["31/08–04/09", ["Quinta","09:40","12:10","Bruna Alcobaça"], ["Terça","13:30","15:10","Djalma Costa"], ["Quarta","13:30","18:40","Andreia Rodrigues"]],
   ["07–11/09", ["Quinta","07:00","09:40","Bruna Alcobaça"], ["Quarta","07:00","08:40","Wilson de Oliveira"], ["Terça","07:00","12:10","Celso Soares"]],
-  ["14–18/09", ["Quarta","16:10","18:40","Leilane Noleto"], ["","","","⚠️ P6 não aparece na planilha"], ["Terça","13:30","18:40","Alan Pinho"]],
-  ["21–25/09", ["Terça","15:20","18:40","Francisco Paulo"], ["Quarta","13:30","15:10","Marcelo Oliveira"], ["Quinta","13:30","18:40","Nayanne Piauilino"]],
-  ["28/09–02/10", ["Quinta","07:50","11:20","José Arimatea"], ["Quarta","13:30","15:10","Rodrigo Norões"], ["Quinta","13:30","18:40","Ginivaldo Victor"]],
-  ["05–09/10", ["Quarta","13:30","18:40","Adolfo Basílio"], ["Quinta","10:30","12:10","Itapuan Damásio ⚠️ dado duplicado"], ["Sexta","07:00","12:10","Joelma Norões"]],
-  ["12–16/10", ["Quarta","13:30","16:10","Leilane Noleto"], ["Quinta","10:30","12:10","Itapuan Damásio"], ["Terça","07:00","12:10","Mário Nicolau"]],
-  ["19–23/10", ["Quinta","07:00","12:10","Luciano Malta"], ["Quinta","15:20","17:00","Itapuan Damásio"], ["Segunda","13:30","18:40","Andreia Rodrigues"]],
+  ["14–18/09", ["Quarta","13:30","18:40","Leilane Noleto"], ["Sexta","13:30","15:10","Antonio Ribeiro (precep.)"], ["Terça","13:30","18:40","Alan Pinho"]],
+  ["21–25/09", ["Quinta","07:50","11:20","José Arimatea"], ["Quarta","13:30","15:10","Marcelo Oliveira"], ["Quinta","13:30","18:40","Nayanne Piauilino"]],
+  ["28/09–02/10", ["Quinta","09:40","12:10","Luciano Malta"], ["Quarta","13:30","15:10","Rodrigo Norões"], ["Quinta","13:30","18:40","Ginivaldo Victor"]],
+  ["05–09/10", ["Quarta","13:30","18:40","Adolfo Basílio"], ["Quinta","15:20","17:00","Arquimedes Cardoso"], ["Sexta","07:00","12:10","Joelma Norões"]],
+  ["12–16/10", ["Terça","15:20","18:40","Francisco Paulo"], ["Quinta","10:30","12:10","Itapuan Damásio"], ["Terça","07:00","12:10","Mário Nicolau (precep.)"]],
+  ["19–23/10", ["Quinta","07:00","09:40","Luciano Malta"], ["Quinta","15:20","17:00","Itapuan Damásio"], ["Segunda","13:30","18:40","Andreia Rodrigues"]],
   ["26–30/10", ["Quinta","09:40","12:10","Bruna Alcobaça"], ["Terça","13:30","15:10","Djalma Costa"], ["Quarta","13:30","18:40","Andreia Rodrigues"]],
   ["02–06/11", ["Quinta","07:00","09:40","Bruna Alcobaça"], ["Quarta","07:00","08:40","Wilson de Oliveira"], ["Terça","07:00","12:10","Celso Soares"]],
-  ["09–13/11", ["Quarta","16:10","18:40","Leilane Noleto"], ["Sexta","13:30","15:10","Antonio Ribeiro"], ["Terça","13:30","18:40","Alan Pinho"]],
+  ["09–13/11", ["Quarta","13:30","18:40","Leilane Noleto"], ["Sexta","13:30","15:10","Antonio Ribeiro (precep.)"], ["Terça","13:30","18:40","Alan Pinho"]],
 ];
 
 function buildInitialWeeksB() {
@@ -121,11 +99,11 @@ function buildInitialWeeksB() {
       { id: uid(), disc: "Saúde da Mulher", day: sm[0], start: sm[1], end: sm[2], prof: sm[3] },
       { id: uid(), disc: "Clínica Cirúrgica II", day: cc[0], start: cc[1], end: cc[2], prof: cc[3] },
       { id: uid(), disc: "Clínica Médica II", day: cm[0], start: cm[1], end: cm[2], prof: cm[3] },
-      { id: uid(), disc: "IESC VII (prática)", day: "", start: "", end: "", prof: "" },
     ],
   }));
 }
 
+// Turma A / P8 — cronograma enviado (sem anomalias, diferente da B)
 const RAW_WEEKS_A = [
   ["03–07/08", ["Quinta","15:20","18:40","Francisco Paulo"], ["Quarta","15:20","17:00","Marcelo Oliveira"], ["Terça","13:30","18:40","Diego Montalvão"]],
   ["10–14/08", ["Quinta","13:30","17:00","Bruna Alcobaça"], ["Terça","15:20","17:00","Djalma Costa"], ["Quarta","07:00","12:10","Celso Soares"]],
@@ -144,6 +122,7 @@ const RAW_WEEKS_A = [
   ["09–13/11", ["Quarta","09:40","12:10","Leilane Noleto"], ["Quinta","13:30","15:10","Arquimedes Cardoso"], ["Terça","13:30","18:40","Nayanne Piauilino"]],
 ];
 
+// Híbrido: quase tudo da Turma B, mas Clínica Médica II (teoria + prática) vem da Turma A / P8
 const FIXED_H = [
   { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P)", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
   { id: uid(), day: "Segunda", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8", sub: "Débora Rodrigues", type: "fixed" },
@@ -158,6 +137,7 @@ const FIXED_H = [
 
 function buildWeeksHybrid() {
   return RAW_WEEKS.map(([range, sm, cc], i) => {
+    // Prática de Médica II via A (P8) ainda não confirmada — fica em branco
     return {
       range,
       blocks: [
@@ -171,6 +151,7 @@ function buildWeeksHybrid() {
 }
 
 function buildWeeksA() {
+  // Prática do P8 ainda não confirmada — fica em branco até você decidir
   return RAW_WEEKS_A.map(([range]) => ({
     range,
     blocks: [
@@ -182,6 +163,7 @@ function buildWeeksA() {
   }));
 }
 
+// Cenário: Médica II+III e Cirúrgica II+III, sem HMP
 const FIXED_MC23 = [
   { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P)", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
   { id: uid(), day: "Segunda", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8", sub: "Débora Rodrigues", type: "fixed" },
@@ -199,6 +181,7 @@ const FIXED_MC23 = [
 
 function buildWeeksMC23() {
   return RAW_WEEKS.map(([range, sm, cc], i) => {
+    // Prática de Médica II via A (P8) ainda não confirmada — fica em branco
     return {
       range,
       blocks: [
@@ -213,6 +196,8 @@ function buildWeeksMC23() {
   });
 }
 
+// Turma A completa (GIS/MPE/SM/CC/Médica II, sem HMP) + Médica III
+// Turma B (Médica II + Cirúrgica II), sem HMP, sem IESC VII, Médica III, Saúde da Mulher via A
 const FIXED_B_SMA3 = [
   { id: uid(), day: "Segunda", start: "07:00", end: "08:40", label: "GIS VI (T/P) — via B", sub: "Newton Nunes / Diego Campelo", type: "fixed" },
   { id: uid(), day: "Segunda", start: "10:30", end: "12:10", label: "MPE VI (EXT) — P5-P8 (via B)", sub: "Débora Rodrigues", type: "fixed" },
@@ -251,17 +236,122 @@ const FIXED_A3 = [
   { id: uid(), day: "Quinta", start: "15:20", end: "17:00", label: "Clínica Médica III (T)", sub: "", type: "theory" },
 ];
 
+// Dados extraídos dos cronogramas de rotação (P1-P8) enviados: IESC VII (P1), Clínica Médica II
+// Turma A (P8), Saúde da Mulher Turma A (P7), Clínica Médica III (P5 — algumas semanas têm 2 aulas
+// na mesma semana, pois o docente daquele grupo aparece com 2 horários na planilha), Clínica
+// Cirúrgica II Turma B (P6)
+const RAW_A3_PRACTICE = [
+  ["03–07/08",
+    ["Terça","13:30","15:10","Joana Elisabeth"],
+    ["Terça","13:30","18:40","Diego Montalvão"],
+    ["Quinta","13:30","17:00","Bruna Alcobaça"],
+    ["Arquimedes Cardoso", ["Quinta","07:00","12:10"]],
+    ["Quarta","13:30","15:10","Rodrigo Norões"]],
+  ["10–14/08",
+    ["Sexta","09:40","11:20","Joana Elisabeth"],
+    ["Quarta","07:00","12:10","Celso Soares"],
+    ["Segunda","13:30","18:40","Adolfo Basílio"],
+    ["Diego Ramos", ["Quinta","07:00","12:10"], ["Quarta","13:30","15:10"]],
+    ["Quinta","15:20","17:00","Arquimedes Cardoso"]],
+  ["17–21/08",
+    ["Terça","15:20","17:00","Ana Carolina"],
+    ["Quarta","07:00","12:10","Joelma Norões"],
+    ["Segunda","15:20","18:40","José Arimatea"],
+    ["Leonardo Halley", ["Sexta","07:00","12:10"], ["Quinta","13:30","15:10"]],
+    ["Quinta","10:30","12:10","Itapuan Damásio"]],
+  ["24–28/08",
+    ["Terça","13:30","15:10","Ana Carolina"],
+    ["Quarta","07:00","12:10","Ginivaldo Victor"],
+    ["Segunda","15:20","18:40","Francisco Paulo"],
+    ["Amanda Tauana", ["Terça","07:00","12:10"]],
+    ["Quinta","15:20","17:00","Itapuan Damásio"]],
+  ["31/08–04/09",
+    ["Quarta","15:20","17:00","Joana Elisabeth"],
+    ["Quinta","13:30","18:40","Rafael Rebelo"],
+    ["Segunda","13:30","17:00","Luciano Malta"],
+    ["Matheus Nogueira", ["Quarta","07:00","12:10"]],
+    ["Terça","13:30","15:10","Djalma Costa"]],
+  ["07–11/09",
+    ["Sexta","07:50","09:40","Joana Elisabeth"],
+    ["Quinta","13:30","18:40","Ângela Freitas"],
+    ["Quarta","09:40","12:10","Leilane Noleto"],
+    ["Dayrton Moreira", ["Terça","08:50","12:10"], ["Terça","13:30","17:00"]],
+    ["Quarta","07:00","08:40","Wilson de Oliveira"]],
+  ["14–18/09",
+    ["Quarta","13:30","15:10","Joana Elisabeth"],
+    ["Terça","13:30","18:40","Nayanne Piauilino"],
+    ["Quarta","07:00","09:40","Leilane Noleto"],
+    ["Vitória Castelo Branco", ["Quinta","07:00","12:10"], ["Quarta","13:30","18:40"]],
+    ["Sexta","13:30","15:10","Antonio Ribeiro"]],
+  ["21–25/09",
+    ["Terça","15:20","17:00","Joana Elisabeth"],
+    ["Terça","13:30","18:40","Andreia Rodrigues"],
+    ["Quinta","15:20","18:40","Francisco Paulo"],
+    ["Dayrton Moreira", ["Sexta","07:00","12:10"]],
+    ["Quarta","13:30","15:10","Marcelo Oliveira"]],
+  ["28/09–02/10",
+    ["Terça","13:30","15:10","Joana Elisabeth"],
+    ["Terça","13:30","18:40","Diego Montalvão"],
+    ["Quinta","13:30","17:00","Bruna Alcobaça"],
+    ["Arquimedes Cardoso", ["Quinta","07:00","12:10"]],
+    ["Quarta","13:30","15:10","Rodrigo Norões"]],
+  ["05–09/10",
+    ["Sexta","09:40","11:20","Joana Elisabeth"],
+    ["Quarta","07:00","12:10","Celso Soares"],
+    ["Segunda","13:30","18:40","Adolfo Basílio"],
+    ["Diego Ramos", ["Quinta","07:00","12:10"], ["Quarta","13:30","15:10"]],
+    ["Quinta","15:20","17:00","Arquimedes Cardoso"]],
+  ["12–16/10",
+    ["Terça","15:20","17:00","Ana Carolina"],
+    ["Quarta","07:00","12:10","Joelma Norões"],
+    ["Segunda","15:20","18:40","José Arimatea"],
+    ["Leonardo Halley", ["Sexta","07:00","12:10"], ["Quinta","13:30","15:10"]],
+    ["Quinta","10:30","12:10","Itapuan Damásio"]],
+  ["19–23/10",
+    ["Terça","13:30","15:10","Ana Carolina"],
+    ["Quarta","07:00","12:10","Ginivaldo Victor"],
+    ["Segunda","15:20","18:40","Francisco Paulo"],
+    ["Amanda Tauana", ["Terça","07:00","12:10"]],
+    ["Quinta","15:20","17:00","Itapuan Damásio"]],
+  ["26–30/10",
+    ["Quarta","15:20","17:00","Joana Elisabeth"],
+    ["Quinta","13:30","18:40","Rafael Rebelo"],
+    ["Segunda","13:30","17:00","Luciano Malta"],
+    ["Matheus Nogueira", ["Quarta","07:00","12:10"]],
+    ["Terça","13:30","15:10","Djalma Costa"]],
+  ["02–06/11",
+    ["Sexta","07:50","09:40","Joana Elisabeth"],
+    ["Quinta","13:30","18:40","Ângela Freitas"],
+    ["Quarta","09:40","12:10","Leilane Noleto"],
+    ["Dayrton Moreira", ["Terça","08:50","12:10"], ["Terça","13:30","17:00"]],
+    ["Quarta","07:00","08:40","Wilson de Oliveira"]],
+  ["09–13/11",
+    ["Quarta","13:30","15:10","Joana Elisabeth"],
+    ["Terça","13:30","18:40","Nayanne Piauilino"],
+    ["Quarta","07:00","09:40","Leilane Noleto"],
+    ["Vitória Castelo Branco", ["Quinta","07:00","12:10"], ["Quarta","13:30","18:40"]],
+    ["Sexta","13:30","15:10","Antonio Ribeiro"]],
+];
+
 function buildWeeksA3() {
-  return RAW_WEEKS.map(([range, sm, cc]) => ({
-    range,
-    blocks: [
-      { id: uid(), disc: "Saúde da Mulher (via A)", day: "", start: "", end: "", prof: "" },
-      { id: uid(), disc: "Clínica Cirúrgica II (via B)", day: cc[0], start: cc[1], end: cc[2], prof: cc[3] },
-      { id: uid(), disc: "Clínica Médica II (via A)", day: "", start: "", end: "", prof: "" },
-      { id: uid(), disc: "Clínica Médica III (prática)", day: "", start: "", end: "", prof: "" },
-      { id: uid(), disc: "IESC VII (prática)", day: "", start: "", end: "", prof: "" },
-    ],
-  }));
+  return RAW_A3_PRACTICE.map(([range, iesc, mc2, sm, mc3, cc2]) => {
+    const [mc3Prof, ...mc3Slots] = mc3;
+    const mc3Blocks = mc3Slots.map((slot, i) => ({
+      id: uid(),
+      disc: mc3Slots.length > 1 ? `Clínica Médica III (prática) — aula ${i + 1}` : "Clínica Médica III (prática)",
+      day: slot[0], start: slot[1], end: slot[2], prof: mc3Prof,
+    }));
+    return {
+      range,
+      blocks: [
+        { id: uid(), disc: "Saúde da Mulher (via A)", day: sm[0], start: sm[1], end: sm[2], prof: sm[3] },
+        { id: uid(), disc: "Clínica Cirúrgica II (via B)", day: cc2[0], start: cc2[1], end: cc2[2], prof: cc2[3] },
+        { id: uid(), disc: "Clínica Médica II (via A)", day: mc2[0], start: mc2[1], end: mc2[2], prof: mc2[3] },
+        ...mc3Blocks,
+        { id: uid(), disc: "IESC VII (prática)", day: iesc[0], start: iesc[1], end: iesc[2], prof: iesc[3] },
+      ],
+    };
+  });
 }
 
 function buildBlankWeeks() {
@@ -406,50 +496,43 @@ function App() {
   });
   const [extras, setExtras] = useState([]);
   const [weekIdx, setWeekIdx] = useState(0);
-  const [openEditor, setOpenEditor] = useState(null);
-  const [view, setView] = useState("turno");
+  const [openEditor, setOpenEditor] = useState(null); // 'fixed' | 'extra' | 'week' | null
+  const [view, setView] = useState("turno"); // 'turno' | 'grade'
   const [loaded, setLoaded] = useState(false);
-  const [saveStatus, setSaveStatus] = useState("");
+  const [saveStatus, setSaveStatus] = useState("idle"); // 'idle' | 'saving' | 'saved' | 'error'
 
+  // carregar dados salvos do navegador (localStorage) ao abrir
   useEffect(() => {
-    let cancelled = false;
     const fallbackNames = { B: "Turma B (P6)", A: "Turma A (P8)", H: "Híbrido (B sem Médica + Médica da A)" };
-    async function load() {
-      try {
-        const result = await window.storage.get("meu-horario-tassyla");
-        if (!cancelled && result && result.value) {
-          const data = JSON.parse(result.value);
-          if (data.turmas) {
-            const fixedTurmas = {};
-            Object.entries(data.turmas).forEach(([id, t]) => {
-              fixedTurmas[id] = { ...t, name: t.name || fallbackNames[id] || `Cenário ${id}` };
-            });
-            setTurmas(fixedTurmas);
-          }
-          if (data.extras) setExtras(data.extras);
+    try {
+      const raw = window.localStorage.getItem("meu-horario-tassyla");
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data.turmas) {
+          const fixedTurmas = {};
+          Object.entries(data.turmas).forEach(([id, t]) => {
+            fixedTurmas[id] = { ...t, name: t.name || fallbackNames[id] || `Cenário ${id}` };
+          });
+          setTurmas(fixedTurmas);
         }
-      } catch (e) {
-        // nada salvo ainda, tudo bem
-      } finally {
-        if (!cancelled) setLoaded(true);
+        if (data.extras) setExtras(data.extras);
       }
+    } catch (e) {
+      // nada salvo ainda, tudo bem
     }
-    load();
-    return () => { cancelled = true; };
+    setLoaded(true);
   }, []);
 
+  // salvar automaticamente no navegador a cada mudança — instantâneo, sem depender de internet
   useEffect(() => {
     if (!loaded) return;
     setSaveStatus("saving");
-    const t = setTimeout(async () => {
-      try {
-        await window.storage.set("meu-horario-tassyla", JSON.stringify({ turmas, extras }));
-        setSaveStatus("saved");
-      } catch (e) {
-        setSaveStatus("");
-      }
-    }, 500);
-    return () => clearTimeout(t);
+    try {
+      window.localStorage.setItem("meu-horario-tassyla", JSON.stringify({ turmas, extras }));
+      setSaveStatus("saved");
+    } catch (e) {
+      setSaveStatus("error");
+    }
   }, [turmas, extras, loaded]);
 
   const fixed = turmas[turma]?.fixed || [];
@@ -515,7 +598,7 @@ function App() {
   }
   function removeScenario(id) {
     const keys = Object.keys(turmas);
-    if (keys.length <= 1) return;
+    if (keys.length <= 1) return; // sempre precisa sobrar pelo menos 1
     const rest = { ...turmas };
     delete rest[id];
     if (turma === id) {
@@ -532,12 +615,34 @@ function App() {
             2026.2 · Grupo {turmas[turma]?.group || "—"}
           </div>
           <h1 style={{ fontSize: 26, fontWeight: 800, margin: "4px 0 2px", color: "#1e2536" }}>Meu horário da semana</h1>
-          <p style={{ fontSize: 13, color: "#5c6270", margin: "0 0 4px" }}>
+          <p style={{ fontSize: 13, color: "#5c6270", margin: "0 0 8px" }}>
             {turmas[turma]?.name || "—"} — organizado por turno. Amarelo = prática que muda toda semana.
           </p>
-          <p style={{ fontSize: 11.5, color: "#b0a480", margin: 0, fontStyle: "italic" }}>
-            criado por Tássyla Sampaio {saveStatus === "saving" && "· salvando..."} {saveStatus === "saved" && "· ✓ salvo neste aparelho"}
+          {saveStatus !== "idle" && (
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 10px",
+                borderRadius: 20,
+                fontSize: 11.5,
+                fontWeight: 700,
+                background: saveStatus === "saving" ? "#fff6e0" : saveStatus === "error" ? "#fdeeee" : saveStatus === "local-only" ? "#eef4ff" : "#e9f9f1",
+                color: saveStatus === "saving" ? "#5c4308" : saveStatus === "error" ? "#a83b3b" : saveStatus === "local-only" ? "#1e3a68" : "#134a30",
+                border: `1px solid ${saveStatus === "saving" ? "#dba528" : saveStatus === "error" ? "#e8b3b3" : saveStatus === "local-only" ? "#7fa8e0" : "#4caf82"}`,
+              }}
+            >
+              {saveStatus === "saving" && "⏳ salvando..."}
+              {saveStatus === "saved" && "✓ salvo"}
+              {saveStatus === "local-only" && "💾 salvo só neste aparelho"}
+              {saveStatus === "error" && "❌ não salvou — tente de novo"}
+            </div>
+          )}
+          <p style={{ fontSize: 11.5, color: "#b0a480", margin: "6px 0 0", fontStyle: "italic" }}>
+            criado por Tássyla Sampaio
           </p>
+
         </header>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
@@ -554,9 +659,9 @@ function App() {
             ⚙ Gerenciar cenários
           </button>
           <button
-            onClick={async () => {
-              if (!window.confirm("Isso apaga tudo que você salvou neste aparelho e volta pro padrão original. Continuar?")) return;
-              try { await window.storage.delete("meu-horario-tassyla"); } catch (e) {}
+            onClick={() => {
+              if (!window.confirm("Isso apaga tudo que você salvou e volta pro padrão original. Continuar?")) return;
+              try { window.localStorage.removeItem("meu-horario-tassyla"); } catch (e) {}
               window.location.reload();
             }}
             style={{ ...btnStyle, borderColor: "#d97b7b", color: "#a83b3b" }}
